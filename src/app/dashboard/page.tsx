@@ -3,13 +3,18 @@
 import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useUserStore } from '@/stores/useUserStore'
-import { createClient } from '@/lib/supabase/client'
+import { createClient as createBrowserClient } from '@/lib/supabase/client' // Rename for clarity
+// Import the server action
+import { createOkrAction } from '../actions'; 
+// We will call the server action, not the service directly from client
+// import { createOkr, getOkrs } from '@/lib/okrService' 
 import ReactFlow, {
   Controls,
   Background,
   applyNodeChanges,
   applyEdgeChanges,
   addEdge,
+  useReactFlow,
   type Node,
   type Edge,
   type OnNodesChange,
@@ -17,29 +22,62 @@ import ReactFlow, {
   type OnConnect,
   BackgroundVariant,
 } from 'reactflow';
+// Import our custom types
+import type { Okr, OkrItemType } from '@/types'; 
 
-import 'reactflow/dist/style.css'; // Import ReactFlow styles
+import 'reactflow/dist/style.css';
 
-// Placeholder initial nodes and edges
-const initialNodes: Node[] = [
-  { id: '1', position: { x: 0, y: 0 }, data: { label: 'Objective 1' } },
-  { id: '2', position: { x: 0, y: 100 }, data: { label: 'Key Result 1.1' } },
-  { id: '3', position: { x: 200, y: 100 }, data: { label: 'Key Result 1.2' } },
-];
-const initialEdges: Edge[] = [
-  { id: 'e1-2', source: '1', target: '2' },
-  { id: 'e1-3', source: '1', target: '3' },
-];
+// Initial state can be empty, will be populated by fetch
+const initialNodes: Node<Okr>[] = [];
+const initialEdges: Edge[] = [];
+
+// Helper to transform Okr data to ReactFlow nodes
+const okrToNode = (okr: Okr, position?: { x: number; y: number }): Node<Okr> => ({
+  id: okr.id,
+  // Use random position if not provided (e.g., for initial fetch)
+  position: position || { x: Math.random() * 400, y: Math.random() * 400 },
+  data: okr, // Store the full Okr object in the node data
+  // You might want custom node types later based on okr.okr_type
+  type: 'default', // Or a custom node type like 'objectiveNode', 'krNode'
+});
+
 
 export default function DashboardPage() {
   const router = useRouter()
   const { user, setUser } = useUserStore()
-  const supabase = createClient()
+  const supabase = createBrowserClient() // Use browser client for auth listeners
+  const { screenToFlowPosition } = useReactFlow();
 
-  // ReactFlow state
-  const [nodes, setNodes] = useState<Node[]>(initialNodes);
+  const [nodes, setNodes] = useState<Node<Okr>[]>(initialNodes);
   const [edges, setEdges] = useState<Edge[]>(initialEdges);
+  const [loading, setLoading] = useState(true);
 
+  // --- Data Fetching (Placeholder) --- 
+  const fetchAndSetOkrs = useCallback(async () => {
+    setLoading(true);
+    try {
+      console.warn("TODO: Implement client-side fetching via Server Action or API route");
+      // Example placeholder:
+      setNodes([]); 
+      setEdges([]);
+    } catch (error) { 
+      console.error("Error fetching OKRs:", error);
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (user) {
+      fetchAndSetOkrs();
+    } else {
+      setNodes([]); 
+      setEdges([]);
+      setLoading(true);
+    }
+  }, [user, fetchAndSetOkrs]);
+
+  // --- ReactFlow Handlers --- 
   const onNodesChange: OnNodesChange = useCallback(
     (changes) => setNodes((nds) => applyNodeChanges(changes, nds)),
     [setNodes]
@@ -49,24 +87,46 @@ export default function DashboardPage() {
     [setEdges]
   );
   const onConnect: OnConnect = useCallback(
-    (connection) => setEdges((eds) => addEdge(connection, eds)),
+    (connection) => {
+      console.log('Edge connected:', connection);
+      // TODO: Persist edge connection using a Server Action/API Route
+      setEdges((eds) => addEdge(connection, eds))
+    },
     [setEdges]
   );
 
-  useEffect(() => {
-    // Check if user is logged in on mount, redirect if not
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      if (!session?.user) {
-        router.push('/') // Redirect to login page
-      } else {
-        // Ensure user state is up-to-date
-        if (!user) {
-          setUser(session.user);
-        }
-      }
-    })
+  // Handle double click on pane to create a node using Server Action
+  const onPaneDoubleClick = useCallback(
+    async (event: React.MouseEvent) => {
+      const position = screenToFlowPosition({ x: event.clientX, y: event.clientY });
+      const newNodeType: OkrItemType = 'objective'; // Default to objective for now
+      const newNodeContent = `New ${newNodeType.replace('_', ' ')}`;
 
-    // Listen for auth changes (e.g., logout)
+      console.log(`Attempting to create ${newNodeType} via Server Action at`, position);
+
+      try {
+        setLoading(true); 
+        // Call the imported server action
+        const newOkr = await createOkrAction({ 
+          content: newNodeContent,
+          okr_type: newNodeType,
+        });
+        
+        const reactFlowNode = okrToNode(newOkr, position);
+        setNodes((nds) => nds.concat(reactFlowNode));
+        console.log("Added node from Server Action result:", reactFlowNode);
+
+      } catch (error) { 
+        console.error(`Error creating ${newNodeType} via Server Action:`, error);
+      } finally {
+         setLoading(false);
+      }
+    },
+    [screenToFlowPosition, setLoading, setNodes]
+  );
+
+  // --- Auth Handlers --- 
+  useEffect(() => {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
        if (event === 'SIGNED_OUT') {
          setUser(null)
@@ -74,49 +134,40 @@ export default function DashboardPage() {
        } else if (event === 'SIGNED_IN') {
          setUser(session?.user ?? null)
        }
+       // Initial check still useful
+       else if (event === 'INITIAL_SESSION' && !session?.user){
+         router.push('/');
+       }
     });
 
+    // Clean up subscription
     return () => {
       subscription?.unsubscribe()
     }
 
-  }, [router, user, setUser, supabase])
-
-  // Fetch OKR data effect (placeholder)
-  useEffect(() => {
-    if (user) {
-      // TODO: Fetch OKRs from okrService and transform into nodes/edges
-      console.log('User logged in, fetch OKRs here and update nodes/edges state.');
-      // Example:
-      // getOkrs().then(okrs => {
-      //   const newNodes = okrs.map(okr => ({ id: okr.id, position: { x: Math.random() * 400, y: Math.random() * 400 }, data: { label: okr.content } }));
-      //   setNodes(newNodes);
-      //   // Logic to create edges based on relationships (e.g., objective_id)
-      //   setEdges([]);
-      // });
-    }
-  }, [user]); // Re-run when user state changes
+  }, [router, user, setUser, supabase]) // Removed user dependency here, handled by INITIAL_SESSION
 
   const handleLogout = async () => {
-    const { error } = await supabase.auth.signOut()
-    if (error) {
-      console.error('Error logging out:', error)
-    } else {
-      setUser(null) // Clear user state immediately
-      router.push('/') // Redirect to login page
-    }
+     await supabase.auth.signOut();
+     // Auth listener above will handle redirect and state clearing
   }
 
-  if (!user) {
-    // Show loading state or null while checking auth/redirecting
+  // --- Render --- 
+  if (!user && loading) { // Show loading only if no user and initial load potentially happening
     return <p>Loading authentication...</p>;
+  }
+  
+  // If no user after checks, Auth UI should be shown via root page logic, 
+  // but render null here to avoid flashing dashboard briefly if redirect is slow.
+  if (!user) { 
+      return null; 
   }
 
   return (
-    // Changed container to allow ReactFlow to fill space
     <div className="w-full h-screen flex flex-col p-4">
+      {/* Header/Logout */}
       <div className="flex justify-between items-center mb-4">
-        <div>
+         <div>
            <h1 className="text-3xl font-bold">Dashboard</h1>
            <p>Welcome, {user.email}!</p>
          </div>
@@ -127,31 +178,26 @@ export default function DashboardPage() {
           Logout
         </button>
       </div>
-
-      {/* Section for ReactFlow Canvas */}
-      {/* Ensure the parent has a defined height (e.g., h-[calc(100vh-150px)] or flex-grow) */}
+      {/* ReactFlow Canvas */}
       <div className="flex-grow bg-card rounded-lg shadow mb-6 border border-border">
-         {/* Set height for ReactFlow container */}
-        <ReactFlow
-          nodes={nodes}
-          edges={edges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
-          onConnect={onConnect}
-          fitView // Automatically zoom/pan to fit nodes
-          className="bg-background" // Optional: Apply background color
-        >
-          <Controls />
-          <Background variant={BackgroundVariant.Dots} gap={12} size={1} />
-        </ReactFlow>
+        {loading && nodes.length === 0 ? ( // Show loading indicator only if truly loading initial data
+           <div className="flex items-center justify-center h-full">Loading OKRs...</div> 
+        ) : (
+          <ReactFlow
+            nodes={nodes}
+            edges={edges}
+            onNodesChange={onNodesChange}
+            onEdgesChange={onEdgesChange}
+            onConnect={onConnect}
+            onDoubleClick={onPaneDoubleClick} // Keep using onDoubleClick based on prior linter feedback
+            fitView
+            className="bg-background"
+          >
+            <Controls />
+            <Background variant={BackgroundVariant.Dots} gap={12} size={1} />
+          </ReactFlow>
+        )}
       </div>
-
-      {/* Placeholder for AI Feature - could be moved or integrated differently */}
-      {/* <div className="bg-card p-6 rounded-lg shadow mb-6">
-        <h2 className="text-xl font-semibold mb-2">AI Feature</h2>
-        <p>Placeholder for OpenAI integration.</p>
-      </div> */}
-
     </div>
   )
 } 
