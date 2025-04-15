@@ -89,6 +89,7 @@ export async function updateOkr(id: string, updates: Partial<Okr>): Promise<Okr>
 
   // Ensure user_id cannot be changed by the update payload
   // Prefix user_id with underscore to mark as intentionally unused
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const { user_id: _user_id, ...safeUpdates } = updates;
 
   const { data, error } = await supabase
