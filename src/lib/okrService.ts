@@ -88,7 +88,8 @@ export async function updateOkr(id: string, updates: Partial<Okr>): Promise<Okr>
   if (!user) throw new Error('User not authenticated');
 
   // Ensure user_id cannot be changed by the update payload
-  const { user_id, ...safeUpdates } = updates;
+  // Prefix user_id with underscore to mark as intentionally unused
+  const { user_id: _user_id, ...safeUpdates } = updates;
 
   const { data, error } = await supabase
     .from('okrs')
