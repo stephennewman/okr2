@@ -10,10 +10,12 @@ export function createClient() {
     {
       cookies: {
         get(name: string) {
+          // @ts-expect-error In specific server contexts, this is synchronous
           return cookieStore.get(name)?.value
         },
         set(name: string, value: string, options: CookieOptions) {
           try {
+            // @ts-expect-error In specific server contexts, this is synchronous
             cookieStore.set({ name, value, ...options })
           // eslint-disable-next-line @typescript-eslint/no-unused-vars
           } catch (_error) {
@@ -24,6 +26,7 @@ export function createClient() {
         },
         remove(name: string, options: CookieOptions) {
           try {
+            // @ts-expect-error In specific server contexts, this is synchronous
             cookieStore.set({ name, value: '', ...options })
           // eslint-disable-next-line @typescript-eslint/no-unused-vars
           } catch (_error) {
